@@ -1094,6 +1094,17 @@ class Bot(models.Model):
             recording_settings = {}
         return recording_settings.get("record_async_transcription_audio_chunks", False)
 
+    def disable_realtime_transcription(self):
+        # Record-only mode: when true, the bot captures per-participant audio chunks
+        # during the meeting but does NOT transcribe in realtime. Transcription is done
+        # post-meeting via an async transcription job. Only meaningful together with
+        # record_async_transcription_audio_chunks (otherwise no audio is kept to
+        # transcribe later).
+        recording_settings = self.settings.get("recording_settings", {})
+        if recording_settings is None:
+            recording_settings = {}
+        return recording_settings.get("disable_realtime_transcription", False)
+
     def record_participant_speech_start_stop_events(self):
         recording_settings = self.settings.get("recording_settings", {})
         if recording_settings is None:

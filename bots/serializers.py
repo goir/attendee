@@ -655,6 +655,7 @@ BOT_RECORDING_SETTINGS_DEFAULT_VALUES = {
     "record_async_transcription_audio_chunks": False,
     "record_participant_speech_start_stop_events": False,
     "reserve_additional_storage": False,
+    "disable_realtime_transcription": False,
 }
 BOT_RECORDING_SETTINGS_SCHEMA = {
     "type": "object",
@@ -680,6 +681,11 @@ BOT_RECORDING_SETTINGS_SCHEMA = {
         "record_async_transcription_audio_chunks": {
             "type": "boolean",
             "description": "Whether to record additional audio data which is needed for creating async (post-meeting) transcriptions. Defaults to false.",
+            "default": False,
+        },
+        "disable_realtime_transcription": {
+            "type": "boolean",
+            "description": "Record-only mode: capture per-participant audio chunks during the meeting but skip realtime transcription, leaving the meeting to be transcribed post-meeting via an async transcription job. Requires record_async_transcription_audio_chunks to be true. Defaults to false.",
             "default": False,
         },
         "record_participant_speech_start_stop_events": {

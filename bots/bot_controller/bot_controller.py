@@ -108,9 +108,17 @@ class BotController:
             return self.per_participant_non_streaming_audio_input_manager
 
     def save_utterances_for_individual_audio_chunks(self):
+        # Record-only mode: skip realtime transcription but keep capturing chunks
+        # (should_capture_audio_chunks() stays true via record_async_transcription_audio_chunks),
+        # so the meeting can be transcribed post-hoc by an async transcription job.
+        if self.bot_in_db.disable_realtime_transcription():
+            return False
         return self.get_recording_transcription_provider() != TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM
 
     def save_utterances_for_closed_captions(self):
+        # Closed captions are realtime transcription too, so record-only mode disables them.
+        if self.bot_in_db.disable_realtime_transcription():
+            return False
         return self.get_recording_transcription_provider() == TranscriptionProviders.CLOSED_CAPTION_FROM_PLATFORM
 
     def should_capture_audio_chunks(self):
