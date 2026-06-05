@@ -28,7 +28,6 @@ SENSITIVE_FIELD_TOKENS = (
     "private_key",
     "signature",
     "encrypted",
-    "blob",
     "api_key",
     "apikey",
     "key",

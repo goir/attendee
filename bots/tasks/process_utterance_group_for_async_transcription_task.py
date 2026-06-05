@@ -14,6 +14,12 @@ def get_transcription(utterances):
         transcription_provider = utterances[0].transcription_provider
         if transcription_provider == TranscriptionProviders.ASSEMBLY_AI:
             transcriptions, failure_data = get_transcription_via_assemblyai_for_utterance_group(utterances)
+        elif transcription_provider in (TranscriptionProviders.CUSTOM_ASYNC, TranscriptionProviders.CUSTOM_ASYNC_V2):
+            # Per-speaker, size-capped chunk combining lives in the transcription_extras app
+            # so the original codebase stays minimal and rebase-friendly.
+            from transcription_extras.group_transcription import get_transcription_for_utterance_group
+
+            transcriptions, failure_data = get_transcription_for_utterance_group(utterances)
         else:
             raise Exception(f"Unknown or unsupported transcription provider: {transcription_provider}")
 

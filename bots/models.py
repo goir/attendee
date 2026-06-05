@@ -2538,7 +2538,11 @@ class AsyncTranscription(models.Model):
 
     @property
     def use_grouped_utterances(self):
-        return self.transcription_provider == TranscriptionProviders.ASSEMBLY_AI
+        return self.transcription_provider in (
+            TranscriptionProviders.ASSEMBLY_AI,
+            TranscriptionProviders.CUSTOM_ASYNC,
+            TranscriptionProviders.CUSTOM_ASYNC_V2,
+        )
 
 
 class AsyncTranscriptionManager:
