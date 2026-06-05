@@ -9,7 +9,7 @@ its own 0-based timeline back onto the correct utterances.
 from types import SimpleNamespace
 from unittest import mock
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 
 from bots.models import TranscriptionProviders
 from transcription_extras import config
@@ -23,12 +23,16 @@ def _utt(id, participant_id, timestamp_ms, duration_ms, sample_rate=16000, provi
         custom_async_v2_headers=lambda: {},
         custom_async_v2_form_data=lambda: {},
     )
+    # Real s16le-mono PCM sized to duration_ms — the splitter derives its windows
+    # from the actual encoded length, so the blob must exist and match.
+    audio_blob = b"\x00" * int(round(duration_ms / 1000.0 * sample_rate * 2))
     return SimpleNamespace(
         id=id,
         participant_id=participant_id,
         timestamp_ms=timestamp_ms,
         duration_ms=duration_ms,
         get_sample_rate=lambda: sample_rate,
+        get_audio_blob=lambda: audio_blob,
         transcription_provider=provider,
         transcription_settings=settings,
     )
@@ -111,6 +115,35 @@ class EndToEndSplitTests(SimpleTestCase):
         self.assertAlmostEqual(transcriptions[1]["words"][0]["start"], 0.5)
         self.assertAlmostEqual(transcriptions[2]["words"][0]["start"], 0.5)  # 4.0 - 3.5 window start
 
+    @mock.patch.dict("os.environ", {config.TRANSCRIPTION_URL_ENV: "https://whisperx.example/attendee/transcribe"})
+    def test_combined_path_drops_gap_hallucination(self):
+        from transcription_extras import group_transcription
+
+        # One speaker, two 2s chunks combined: u1 [0,2) gap [2,3.5) u2 [3.5,5.5).
+        u1 = _utt(1, "A", 0, 2000)
+        u2 = _utt(2, "A", 2000, 2000)
+
+        # "danke" is a hallucination on the 1.5s silence gap (3.3-3.6s): it must
+        # NOT leak onto u2's head the way the legacy splitter did.
+        response = mock.Mock(status_code=200)
+        response.json.return_value = {
+            "status": "done",
+            "result": {"transcription": {"full_transcript": "hi danke there", "utterances": [{"words": [
+                {"word": "hi", "start": 0.5, "end": 1.0},
+                {"word": "danke", "start": 3.3, "end": 3.6},
+                {"word": "there", "start": 4.0, "end": 4.5},
+            ]}]}},
+        }
+
+        with mock.patch.object(group_transcription, "get_mp3_for_utterance_group", return_value=b"fake-mp3"), mock.patch("transcription_extras.whisperx_group_client.requests.post", side_effect=[response]):
+            transcriptions, failure = group_transcription.get_transcription_for_utterance_group([u1, u2])
+
+        self.assertIsNone(failure)
+        self.assertEqual(transcriptions[1]["transcript"], "hi")
+        self.assertEqual(transcriptions[2]["transcript"], "there")
+        all_words = [w["word"] for utt in transcriptions.values() for w in utt["words"]]
+        self.assertNotIn("danke", all_words)
+
     @mock.patch.dict("os.environ", {}, clear=True)
     def test_missing_url_returns_failure(self):
         from transcription_extras import group_transcription
@@ -132,19 +165,35 @@ def _transcribed_utt(id, participant_name, timestamp_ms, transcript, words=None)
     )
 
 
+@override_settings(TIME_ZONE="UTC", USE_TZ=True)
 class TranscriptExportTests(SimpleTestCase):
-    def test_transcript_text_formats_timestamp_and_speaker(self):
+    def test_transcript_text_renders_epoch_ms_as_datetime_with_seconds(self):
         from transcription_extras.transcript_export import transcript_text
 
+        # timestamp_ms is a Unix epoch in ms; 0 -> 1970-01-01 00:00:00, 65000 -> +1:05.
         utts = [_transcribed_utt(1, "Alice", 0, "hello"), _transcribed_utt(2, "Bob", 65000, "hi there")]
         text = transcript_text(utts)
-        self.assertEqual(text, "[00:00:00] Alice: hello\n[00:01:05] Bob: hi there")
+        self.assertEqual(text, "[1970-01-01 00:00:00] Alice: hello\n[1970-01-01 00:01:05] Bob: hi there")
+
+    def test_transcript_text_uses_real_meeting_epoch(self):
+        from datetime import datetime
+        from datetime import timezone as dtz
+
+        from transcription_extras.transcript_export import transcript_text
+
+        # A real meeting-scale epoch (the bug report showed ~1.78e12 ms): must render as
+        # a 2020s wall-clock datetime with seconds, not an overflowed HH:MM:SS.
+        epoch_ms = 1780669050000
+        expected = datetime.fromtimestamp(epoch_ms / 1000, tz=dtz.utc).strftime("%Y-%m-%d %H:%M:%S")
+        self.assertTrue(expected.startswith("2026-"), expected)
+        utts = [_transcribed_utt(1, "Nicolas", epoch_ms, "Ja")]
+        self.assertEqual(transcript_text(utts), f"[{expected}] Nicolas: Ja")
 
     def test_transcript_text_skips_empty_and_pending(self):
         from transcription_extras.transcript_export import transcript_text
 
         utts = [_transcribed_utt(1, "Alice", 0, "hello"), _transcribed_utt(2, "Bob", 1000, ""), _transcribed_utt(3, "Cara", 2000, None)]
-        self.assertEqual(transcript_text(utts), "[00:00:00] Alice: hello")
+        self.assertEqual(transcript_text(utts), "[1970-01-01 00:00:00] Alice: hello")
 
     def test_transcript_json_includes_words_and_speaker(self):
         from transcription_extras.transcript_export import transcript_json

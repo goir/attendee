@@ -1,16 +1,26 @@
 """Assemble an AsyncTranscription's utterances into a readable transcript / JSON.
 
-Pure functions over already-ordered utterances (anything exposing ``timestamp_ms``,
-``duration_ms``, ``participant`` and ``transcription``), so they are DB-free testable.
-Order the utterances (by ``timestamp_ms``) before passing them in.
+Functions operate over already-ordered utterances (anything exposing ``timestamp_ms``,
+``duration_ms``, ``participant`` and ``transcription``). Order the utterances (by
+``timestamp_ms``) before passing them in.
 """
 
+from datetime import datetime
+from datetime import timezone as datetime_timezone
 
-def format_timestamp(ms):
-    total_seconds = int(ms // 1000)
-    hours, remainder = divmod(total_seconds, 3600)
-    minutes, seconds = divmod(remainder, 60)
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+from django.utils import timezone
+
+
+def format_timestamp(epoch_ms):
+    """Render a Unix epoch-millisecond timestamp as a localized wall-clock datetime.
+
+    ``Utterance.timestamp_ms`` (inherited from the audio chunk) is a Unix epoch time in
+    milliseconds captured during the meeting — NOT an offset from the meeting start. It
+    is shown as ``YYYY-MM-DD HH:MM:SS`` in the project timezone, with seconds, which
+    matters for correlating runtimes.
+    """
+    aware_utc = datetime.fromtimestamp(epoch_ms / 1000, tz=datetime_timezone.utc)
+    return timezone.localtime(aware_utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def speaker_label(utterance):

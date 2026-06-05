@@ -148,6 +148,10 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = "en-us"
 
+# Force date/times to render WITH seconds (admin runtimes need second precision).
+# Provided by the admin_extras app; Django uses its "en" module for the "en-us" locale.
+FORMAT_MODULE_PATH = ["admin_extras.formats"]
+
 TIME_ZONE = os.getenv("TIME_ZONE", "UTC")
 
 USE_I18N = True

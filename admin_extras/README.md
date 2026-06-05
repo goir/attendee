@@ -91,3 +91,18 @@ python manage.py test admin_extras
 3. Consumers then just add the app to `INSTALLED_APPS` and set `ADMIN_EXTRAS_APP_LABELS`.
 
 Until then it lives inline; see [`../FORK_CHANGES.md`](../FORK_CHANGES.md) for fork tracking.
+
+## Datetime formats with seconds
+
+`formats/en/formats.py` forces `DATETIME_FORMAT` / `SHORT_DATETIME_FORMAT` / `TIME_FORMAT` to
+include **seconds** (`Y-m-d H:i:s`), because the default `en-us` locale drops them and admin
+runtimes need second precision. It is wired up by one line in settings:
+
+```python
+FORMAT_MODULE_PATH = ["admin_extras.formats"]
+```
+
+Django selects the `en` module for the `en-us` locale. This is project-wide localization, but
+Attendee's only HTML surface is the admin (the API uses DRF's own ISO-8601 formatting, which is
+unaffected). Since Django 5 always localizes, `FORMAT_MODULE_PATH` is the supported way to override
+formats — `DATETIME_FORMAT` in settings alone would be ignored for a bundled locale like `en`.

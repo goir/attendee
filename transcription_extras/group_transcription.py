@@ -3,9 +3,11 @@
 Public entry point ``get_transcription_for_utterance_group(utterances)`` is called
 from the (upstream) async group task for CUSTOM_ASYNC / CUSTOM_ASYNC_V2 providers.
 
-It reuses Attendee's existing, provider-agnostic helpers:
+It reuses Attendee's existing MP3 builder and our hardened splitter:
   - get_mp3_for_utterance_group     : concatenate raw PCM + fixed silence -> one MP3
-  - split_transcription_by_utterance: re-attribute words to each chunk by time window
+  - .split.split_transcription_by_utterance: re-attribute words to each chunk by
+    time window, with drift-free windows (from real encoded length) and
+    silence-gap hallucination rejection
 
 Each combined file is INDEPENDENT: the service returns word times starting at 0 for
 that file, so every combined file is split on its OWN utterance subset, in
@@ -15,10 +17,11 @@ window list across files and never treat the times as a global meeting timeline.
 
 import logging
 
-from bots.transcription_utils import get_mp3_for_utterance_group, split_transcription_by_utterance
+from bots.transcription_utils import get_mp3_for_utterance_group
 
 from . import config
 from .grouping import group_by_speaker, split_into_size_capped_groups
+from .split import split_transcription_by_utterance
 from .whisperx_group_client import build_request_params, transcribe_combined_mp3
 
 logger = logging.getLogger(__name__)

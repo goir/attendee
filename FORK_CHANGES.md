@@ -43,7 +43,7 @@ git checkout main && git merge --ff-only upstream/main
 | # | Commit | Summary | Touches upstream files? | PR-ready? |
 |---|--------|---------|--------------------------|-----------|
 | 3 | _uncommitted_ | `transcription_extras` app: per-speaker, size-capped chunk combining for custom-async transcription | 2 tiny edits (`bots/models.py`, one async task) + `INSTALLED_APPS` line | Fork-local (depends on our WhisperX service) |
-| 2 | `35954a4d` | `admin_extras` app: auto read-only admin for every model | 1 line in `attendee/settings/base.py` | Mergeable as-is, but niche; likely keep fork-local |
+| 2 | `35954a4d` (+ follow-ups) | `admin_extras` app: auto read-only admin for every model; admin datetimes with seconds | 2 lines in `attendee/settings/base.py` (`INSTALLED_APPS`, `FORMAT_MODULE_PATH`) | Mergeable as-is, but niche; likely keep fork-local |
 | 1 | `d76d92bb` | Record-only mode (`disable_realtime_transcription`) | Yes (`bots/*`) | Yes — good upstream candidate |
 
 ---
@@ -69,7 +69,9 @@ git checkout main && git merge --ff-only upstream/main
     **New files → zero rebase risk.**
   - `admin.py` also adds a custom **AsyncTranscription admin** (transcript preview + `.txt`/`.json`
     download), replacing admin_extras' generic read-only admin for that model — so `bots/admin.py`
-    stays untouched.
+    stays untouched. `transcript_export.py` renders each utterance's `timestamp_ms` (a Unix
+    **epoch-millisecond** value, not a meeting offset) as a localized `YYYY-MM-DD HH:MM:SS` datetime
+    with seconds — fixing an earlier preview bug that showed overflowed `HH:MM:SS` (e.g. `494628:17:30`).
   - `attendee/settings/base.py` — appended `"transcription_extras"` to `INSTALLED_APPS`.
   - `bots/models.py` — `AsyncTranscription.use_grouped_utterances` now also `True` for
     `CUSTOM_ASYNC` / `CUSTOM_ASYNC_V2` (was AssemblyAI-only). **~4-line edit.**
@@ -102,8 +104,11 @@ git checkout main && git merge --ff-only upstream/main
   Sensitive fields (name contains `key`/`token`/`secret`/`password`/`credential`/… or any
   `BinaryField`) are **masked** in the detail view.
 - **Files:**
-  - `admin_extras/` — new app (`__init__.py`, `apps.py`, `admin.py`, `registration.py`, `tests.py`). **New files → zero rebase risk.**
-  - `attendee/settings/base.py` — **one appended line** `"admin_extras",` at the end of `INSTALLED_APPS`. The only upstream file touched; appended last to minimize conflict.
+  - `admin_extras/` — new app (`__init__.py`, `apps.py`, `admin.py`, `registration.py`, `tests.py`,
+    plus `formats/en/formats.py` for the seconds-everywhere datetime format). **New files → zero rebase risk.**
+  - `attendee/settings/base.py` — two appended lines: `"admin_extras"` in `INSTALLED_APPS`, and
+    `FORMAT_MODULE_PATH = ["admin_extras.formats"]` (forces admin datetimes to show seconds — the
+    default `en-us` locale drops them, and Django 5 always localizes so this is the supported override).
 - **Config knob:** `PROJECT_APP_LABELS` in `admin_extras/admin.py` (currently `("accounts", "bots")`).
 - **Rebase notes:** The only possible conflict is the `INSTALLED_APPS` tail. If upstream also
   appends an app there, resolve by keeping both lines. Nothing else can conflict.
