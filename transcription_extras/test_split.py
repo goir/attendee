@@ -1,4 +1,4 @@
-"""Phase 0 reproduction + override verification for utterance-splitting.
+"""Reproduction + verification for utterance-splitting.
 
 Django-free on purpose: these run with bare ``python -m unittest`` (and under the
 repo's ``pytest``) without Postgres, Django settings, or the transcription
@@ -9,8 +9,12 @@ words land on utterances.
 ``_legacy_split`` is a faithful copy of the current upstream
 ``bots.transcription_utils.split_transcription_by_utterance`` (the
 "first overlapping window, then break" loop with duration_ms windows). It is the
-regression witness: each test shows the legacy behaviour AND the hardened
-``transcription_extras.split`` behaviour side by side.
+drift witness in WindowDriftTests.
+
+The hardened ``transcription_extras.split`` derives windows from the real encoded
+audio length and buckets each word to the window nearest its midpoint, never
+dropping real speech. FirstWordPreservationTests guards the real-data regression
+where an earlier overlap-fraction drop ate the first word of utterances.
 """
 
 import unittest
@@ -41,7 +45,7 @@ def _utt(id, duration_ms, *, blob_seconds=None):
 
 
 def _legacy_split(transcription_result, utterances, *, silence_seconds=3.0):
-    """Verbatim copy of upstream split_transcription_by_utterance (the buggy one)."""
+    """Verbatim copy of upstream split_transcription_by_utterance."""
     utterances = list(utterances)
     if not utterances:
         return {}
@@ -85,9 +89,11 @@ def _words(*triples):
     return [{"word": w, "start": s, "end": e} for (w, s, e) in triples]
 
 
-class NormalCaseTests(unittest.TestCase):
-    """Clean words inside their windows: legacy and override must agree."""
+def _all_words(result):
+    return [w["word"] for utt in result.values() for w in utt["words"]]
 
+
+class NormalCaseTests(unittest.TestCase):
     def test_clean_split_matches_legacy(self):
         utts = [_utt(1, 2000), _utt(2, 2000)]
         # File: u1 [0,2)  gap [2,3.5)  u2 [3.5,5.5)
@@ -100,46 +106,65 @@ class NormalCaseTests(unittest.TestCase):
         self.assertEqual(new[1]["transcript"], "hallo")
         self.assertEqual(legacy[2]["transcript"], "welt")
         self.assertEqual(new[2]["transcript"], "welt")
-        # Re-based to each utterance's own start.
         self.assertAlmostEqual(new[2]["words"][0]["start"], 0.5)  # 4.0 - 3.5
 
     def test_empty_utterances_returns_empty(self):
         self.assertEqual(split_transcription_by_utterance({"words": []}, []), {})
 
 
-class GapHallucinationTests(unittest.TestCase):
-    """Defect 1: a phantom word in the inter-chunk silence gap."""
+class FirstWordPreservationTests(unittest.TestCase):
+    """Real-data regression: the first word of an utterance, timestamped slightly
+    before its window start (it bled into the leading silence gap), must be KEPT,
+    not dropped — and re-based to a non-negative time."""
 
-    def setUp(self):
-        self.utts = [_utt(1, 2000), _utt(2, 2000)]  # u1 [0,2)  gap [2,3.5)  u2 [3.5,5.5)
-        # "danke" sits in the gap and bleeds 0.1s past u2's start (3.5).
-        self.result = {
-            "language": "de",
-            "words": _words(("hallo", 0.5, 1.0), ("danke", 3.3, 3.6), ("welt", 4.0, 4.5)),
-        }
+    def test_first_word_in_leading_gap_is_kept(self):
+        utts = [_utt(1, 2000), _utt(2, 2000)]  # u1 [0,2) gap [2,3.5) u2 [3.5,5.5)
+        # "Das" is u2's first word but landed at 3.3-3.5 (its midpoint 3.4 sits in
+        # the gap, nearer u2). Must attach to u2, not vanish.
+        result = {"language": "de", "words": _words(("hallo", 0.5, 1.0), ("Das", 3.3, 3.5), ("Fehler", 4.0, 4.6))}
+        new = split_transcription_by_utterance(result, utts, silence_seconds=1.5)
 
-    def test_legacy_leaks_phantom_onto_next_utterance(self):
-        legacy = _legacy_split(self.result, self.utts, silence_seconds=1.5)
-        # Upstream prepends the gap word to u2 — with a NEGATIVE re-based start.
-        self.assertEqual(legacy[2]["transcript"], "danke welt")
-        self.assertLess(legacy[2]["words"][0]["start"], 0.0)
-
-    def test_override_drops_phantom(self):
-        new = split_transcription_by_utterance(self.result, self.utts, silence_seconds=1.5)
         self.assertEqual(new[1]["transcript"], "hallo")
-        self.assertEqual(new[2]["transcript"], "welt")
-        all_words = [w["word"] for u in new.values() for w in u["words"]]
-        self.assertNotIn("danke", all_words)
+        self.assertEqual(new[2]["transcript"], "Das Fehler")
+        self.assertGreaterEqual(new[2]["words"][0]["start"], 0.0)  # clamped, never negative
+
+    def test_no_real_words_are_dropped(self):
+        utts = [_utt(1, 2000), _utt(2, 2000)]
+        result = {"language": "de", "words": _words(("a", 0.5, 0.8), ("b", 3.3, 3.5), ("c", 4.0, 4.2))}
+        new = split_transcription_by_utterance(result, utts, silence_seconds=1.5)
+        self.assertEqual(sorted(_all_words(new)), ["a", "b", "c"])
+
+    def test_word_missing_timestamps_is_skipped(self):
+        utts = [_utt(1, 2000)]
+        result = {"language": "de", "words": [{"word": "a", "start": 0.5, "end": 0.8}, {"word": "x", "start": None, "end": None}]}
+        new = split_transcription_by_utterance(result, utts, silence_seconds=1.5)
+        self.assertEqual(_all_words(new), ["a"])
+
+
+class GapWordAssignmentTests(unittest.TestCase):
+    """A word in the inter-chunk gap goes to whichever utterance is nearer."""
+
+    def test_gap_word_nearer_first_utterance(self):
+        utts = [_utt(1, 2000), _utt(2, 2000)]  # gap [2.0, 3.5)
+        result = {"language": "de", "words": _words(("x", 2.1, 2.3))}  # midpoint 2.2 -> u1
+        new = split_transcription_by_utterance(result, utts, silence_seconds=1.5)
+        self.assertEqual(new[1]["transcript"], "x")
+        self.assertEqual(new[2]["transcript"], "")
+
+    def test_gap_word_nearer_second_utterance(self):
+        utts = [_utt(1, 2000), _utt(2, 2000)]  # gap [2.0, 3.5)
+        result = {"language": "de", "words": _words(("x", 3.2, 3.4))}  # midpoint 3.3 -> u2
+        new = split_transcription_by_utterance(result, utts, silence_seconds=1.5)
+        self.assertEqual(new[1]["transcript"], "")
+        self.assertEqual(new[2]["transcript"], "x")
 
 
 class WindowDriftTests(unittest.TestCase):
-    """Defect 2: duration_ms under-reports the real encoded audio length."""
+    """duration_ms under-reports the real encoded audio length: legacy (duration_ms
+    windows) drops a boundary word; the override (blob-length windows) keeps it."""
 
     def setUp(self):
-        # duration_ms says 2.0s, but the PCM blob is actually 2.05s.
         self.utts = [_utt(1, 2000, blob_seconds=2.05), _utt(2, 2000, blob_seconds=2.05)]
-        # "ende" is real audio inside u1 (2.02-2.04s < 2.05) but PAST the 2.0s
-        # duration_ms window — and far before any duration_ms-based u2 window.
         self.result = {
             "language": "de",
             "words": _words(("hallo", 0.5, 1.0), ("ende", 2.02, 2.04), ("welt", 4.0, 4.5)),
@@ -147,8 +172,7 @@ class WindowDriftTests(unittest.TestCase):
 
     def test_legacy_drops_boundary_word_due_to_drift(self):
         legacy = _legacy_split(self.result, self.utts, silence_seconds=1.5)
-        all_words = [w["word"] for u in legacy.values() for w in u["words"]]
-        self.assertNotIn("ende", all_words)  # silently lost
+        self.assertNotIn("ende", _all_words(legacy))
 
     def test_override_keeps_boundary_word(self):
         new = split_transcription_by_utterance(self.result, self.utts, silence_seconds=1.5)

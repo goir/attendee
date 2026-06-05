@@ -69,7 +69,8 @@ git checkout main && git merge --ff-only upstream/main
     **New files → zero rebase risk.**
   - `admin.py` also adds a custom **AsyncTranscription admin** (transcript preview + `.txt`/`.json`
     download), replacing admin_extras' generic read-only admin for that model — so `bots/admin.py`
-    stays untouched. `transcript_export.py` renders each utterance's `timestamp_ms` (a Unix
+    stays untouched. Records stay non-editable (no add/change) but **may be deleted** (single +
+    bulk `delete_selected`); deletion cascades to the transcription's utterances. `transcript_export.py` renders each utterance's `timestamp_ms` (a Unix
     **epoch-millisecond** value, not a meeting offset) as a localized `YYYY-MM-DD HH:MM:SS` datetime
     with seconds — fixing an earlier preview bug that showed overflowed `HH:MM:SS` (e.g. `494628:17:30`).
   - `attendee/settings/base.py` — appended `"transcription_extras"` to `INSTALLED_APPS`.

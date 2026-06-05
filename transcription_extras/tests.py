@@ -116,21 +116,22 @@ class EndToEndSplitTests(SimpleTestCase):
         self.assertAlmostEqual(transcriptions[2]["words"][0]["start"], 0.5)  # 4.0 - 3.5 window start
 
     @mock.patch.dict("os.environ", {config.TRANSCRIPTION_URL_ENV: "https://whisperx.example/attendee/transcribe"})
-    def test_combined_path_drops_gap_hallucination(self):
+    def test_combined_path_keeps_first_word_at_window_edge(self):
         from transcription_extras import group_transcription
 
         # One speaker, two 2s chunks combined: u1 [0,2) gap [2,3.5) u2 [3.5,5.5).
         u1 = _utt(1, "A", 0, 2000)
         u2 = _utt(2, "A", 2000, 2000)
 
-        # "danke" is a hallucination on the 1.5s silence gap (3.3-3.6s): it must
-        # NOT leak onto u2's head the way the legacy splitter did.
+        # "Und" is u2's first word but its timestamp bled into the leading gap
+        # (3.3-3.5s, midpoint nearer u2). It must be kept on u2, not clipped —
+        # the real-data regression where leading words were dropped.
         response = mock.Mock(status_code=200)
         response.json.return_value = {
             "status": "done",
-            "result": {"transcription": {"full_transcript": "hi danke there", "utterances": [{"words": [
+            "result": {"transcription": {"full_transcript": "hi Und there", "utterances": [{"words": [
                 {"word": "hi", "start": 0.5, "end": 1.0},
-                {"word": "danke", "start": 3.3, "end": 3.6},
+                {"word": "Und", "start": 3.3, "end": 3.5},
                 {"word": "there", "start": 4.0, "end": 4.5},
             ]}]}},
         }
@@ -140,9 +141,9 @@ class EndToEndSplitTests(SimpleTestCase):
 
         self.assertIsNone(failure)
         self.assertEqual(transcriptions[1]["transcript"], "hi")
-        self.assertEqual(transcriptions[2]["transcript"], "there")
+        self.assertEqual(transcriptions[2]["transcript"], "Und there")
         all_words = [w["word"] for utt in transcriptions.values() for w in utt["words"]]
-        self.assertNotIn("danke", all_words)
+        self.assertEqual(sorted(all_words), ["Und", "hi", "there"])
 
     @mock.patch.dict("os.environ", {}, clear=True)
     def test_missing_url_returns_failure(self):

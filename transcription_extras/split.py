@@ -13,13 +13,17 @@ that surface as misplaced / orphaned words in the merged transcript:
    utterance (or dropped). Deriving from the blob makes the windows match exactly
    what ``get_mp3_for_utterance_group`` fed to ffmpeg.
 
-2. **Gap-artifact rejection.** Each word is assigned to the window of MAXIMUM
-   temporal overlap, and any word whose in-window overlap is below
-   ``min_overlap_fraction`` of its own duration is DROPPED (and logged) as a
-   silence-gap artifact. Whisper hallucinations on the inter-chunk silence land
-   in the gap between two windows; upstream's "first window that overlaps, then
-   break" leaks such a word onto the *following* utterance's head (often with a
-   negative re-based start). Here it is discarded.
+2. **Robust, lossless assignment.** Each word is bucketed to the window nearest
+   its midpoint and re-based to that utterance's start. Words are NEVER dropped
+   (only entries missing start/end are skipped). This tolerates the small offset
+   between WhisperX's decoded-MP3 timeline and the window math (MP3 encoder delay
+   + VAD timestamp restoration) that would otherwise clip a word sitting at a
+   window's left edge — i.e. the first word of an utterance. Upstream leaks a gap
+   word onto the *following* utterance specifically; nearest-midpoint puts it on
+   whichever side is actually closer. Suppressing Whisper hallucinations on the
+   inter-chunk silence is intentionally NOT done here: a hallucination and a real
+   first word are indistinguishable by timing alone, so that belongs in the ASR
+   layer (no_speech_prob / VAD), not the splitter.
 
 Pure module — no Django/model imports. It operates on any duck-typed utterance
 exposing ``id``, ``get_audio_blob()`` and ``get_sample_rate()`` — the real
@@ -67,7 +71,6 @@ def split_transcription_by_utterance(
     utterances,
     *,
     silence_seconds=3.0,
-    min_overlap_fraction=0.5,
     sample_width_bytes=_DEFAULT_SAMPLE_WIDTH_BYTES,
     channels=_DEFAULT_CHANNELS,
 ):
@@ -75,11 +78,9 @@ def split_transcription_by_utterance(
 
     Assumes the utterances were concatenated in THIS order with exactly
     ``silence_seconds`` of silence between them (matching
-    ``get_mp3_for_utterance_group``).
-
-    ``min_overlap_fraction`` is the share of a word's own duration that must fall
-    inside its best-matching utterance window for the word to be kept; words that
-    sit mostly in an inter-chunk silence gap (hallucinations) are dropped.
+    ``get_mp3_for_utterance_group``). Each word is bucketed to the window nearest
+    its midpoint and re-based to that utterance's start. Words are never dropped
+    except entries lacking start/end.
     """
     utterances = list(utterances)
     if not utterances:
@@ -101,46 +102,48 @@ def split_transcription_by_utterance(
     output = {u.id: {"transcript": "", "words": [], "language": language} for u in utterances}
     buckets = {u.id: [] for u in utterances}
 
-    dropped = 0
+    skipped = 0
     for w in words:
         w_start = w.get("start")
         w_end = w.get("end")
         if w_start is None or w_end is None:
-            dropped += 1
+            skipped += 1
             continue
 
-        # Assign to the window of maximum temporal overlap.
+        # Bucket by nearest window to the word's midpoint. Robust to the small
+        # offset between the decoded-MP3 timeline and the window math: a word that
+        # bled into a silence gap still lands on its rightful utterance instead of
+        # being clipped. Never drops real speech.
+        midpoint = (w_start + w_end) / 2.0
         best_id = None
         best_start = 0.0
-        best_overlap = 0.0
+        best_dist = None
         for utterance_id, start, end in windows:
-            overlap = min(w_end, end) - max(w_start, start)
-            if overlap > best_overlap:
-                best_overlap = overlap
+            if midpoint < start:
+                dist = start - midpoint
+            elif midpoint > end:
+                dist = midpoint - end
+            else:
+                dist = 0.0
+            if best_dist is None or dist < best_dist:
+                best_dist = dist
                 best_id = utterance_id
                 best_start = start
 
-        word_duration = max(w_end - w_start, 1e-9)
-        if best_id is None or best_overlap < min_overlap_fraction * word_duration:
-            # Mostly (or entirely) inside an inter-chunk silence gap: a Whisper
-            # hallucination on dead air. Drop rather than leak onto a neighbour.
-            dropped += 1
-            logger.info(
-                "transcription_extras.split: dropping gap-artifact word %r (start=%.3f end=%.3f, best_overlap=%.3f)",
-                w.get("word"), w_start, w_end, best_overlap,
-            )
-            continue
-
         word_adjusted = dict(w)
-        word_adjusted["start"] = w_start - best_start
-        word_adjusted["end"] = w_end - best_start
+        # Re-base to the chosen utterance; clamp so a word that started just
+        # inside the preceding gap never yields a negative timestamp.
+        rebased_start = w_start - best_start
+        rebased_end = w_end - best_start
+        word_adjusted["start"] = max(0.0, rebased_start)
+        word_adjusted["end"] = max(word_adjusted["start"], rebased_end)
         buckets[best_id].append(word_adjusted)
 
     for utterance_id, utterance_words in buckets.items():
         output[utterance_id]["words"] = utterance_words
         output[utterance_id]["transcript"] = " ".join(w["word"] for w in utterance_words)
 
-    if dropped:
-        logger.info("transcription_extras.split: dropped %d gap/invalid word(s) across %d utterance(s)", dropped, len(utterances))
+    if skipped:
+        logger.info("transcription_extras.split: skipped %d word(s) missing start/end", skipped)
 
     return output
