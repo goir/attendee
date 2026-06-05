@@ -165,6 +165,36 @@ def _transcribed_utt(id, participant_name, timestamp_ms, transcript, words=None)
     )
 
 
+class AsyncTranscriptionAdminPermissionTests(SimpleTestCase):
+    """The admin is view-only for editing but permits deletion."""
+
+    def _admin(self):
+        from django.contrib import admin
+
+        from bots.models import AsyncTranscription
+
+        return admin.site._registry[AsyncTranscription]
+
+    def test_registered_admin_is_ours(self):
+        from transcription_extras.admin import AsyncTranscriptionAdmin
+
+        self.assertIsInstance(self._admin(), AsyncTranscriptionAdmin)
+
+    def test_records_are_not_editable_but_are_deletable(self):
+        model_admin = self._admin()
+        self.assertFalse(model_admin.has_add_permission(None))
+        self.assertFalse(model_admin.has_change_permission(None))
+        self.assertTrue(model_admin.has_delete_permission(None))
+
+    def test_bulk_delete_action_is_available(self):
+        # has_delete_permission=True keeps Django's site-wide "delete_selected"
+        # bulk action in the changelist (the admin doesn't set actions = None).
+        from django.test import RequestFactory
+
+        actions = self._admin().get_actions(RequestFactory().get("/admin/"))
+        self.assertIn("delete_selected", actions)
+
+
 @override_settings(TIME_ZONE="UTC", USE_TZ=True)
 class TranscriptExportTests(SimpleTestCase):
     def test_transcript_text_renders_epoch_ms_as_datetime_with_seconds(self):

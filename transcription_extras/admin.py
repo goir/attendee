@@ -3,7 +3,8 @@
 AsyncTranscription has no hand-written admin upstream, so admin_extras auto-registers
 a generic read-only admin for it. We swap that out here (unregister + register) for a
 view that assembles the per-utterance transcriptions into a readable transcript and
-offers .txt / .json downloads. Kept in this app so bots/admin.py stays untouched.
+offers .txt / .json downloads. Records stay non-editable but can be deleted. Kept in
+this app so bots/admin.py stays untouched.
 """
 
 import json
@@ -57,7 +58,11 @@ class AsyncTranscriptionAdmin(admin.ModelAdmin):
         return False
 
     def has_delete_permission(self, request, obj=None):
-        return False
+        # Records stay non-editable, but operators may delete them — both from the
+        # detail page and via the "Delete selected" bulk action. Deletion cascades
+        # to the async transcription's utterances (Utterance.async_transcription is
+        # on_delete=CASCADE), which Django lists on the confirmation page.
+        return True
 
     def utterance_count(self, obj):
         return obj.utterances.count()
