@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     "drf_spectacular",
     "storages",
     "django_extensions",
+    "admin_extras",
 ]
 
 CREDENTIALS_ENCRYPTION_KEY = os.getenv("CREDENTIALS_ENCRYPTION_KEY")
