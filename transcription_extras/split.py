@@ -40,13 +40,13 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# s16le mono is what get_mp3_for_utterance_group streams into ffmpeg; keep these
-# in sync with that builder so window math matches the encoded audio.
-_DEFAULT_SAMPLE_WIDTH_BYTES = 2
-_DEFAULT_CHANNELS = 1
+# s16le mono is what get_mp3_for_utterance_group streams into ffmpeg, so the
+# combined audio is always 2 bytes/sample, 1 channel.
+_BYTES_PER_SAMPLE = 2
+_CHANNELS = 1
 
 
-def _utterance_seconds(utterance, *, sample_width_bytes, channels):
+def _utterance_seconds(utterance):
     """Exact audio seconds from the encoded PCM length.
 
     Uses the utterance's real audio so windows match exactly what ffmpeg encoded
@@ -60,10 +60,7 @@ def _utterance_seconds(utterance, *, sample_width_bytes, channels):
         raise ValueError(f"utterance {getattr(utterance, 'id', '?')} has no audio blob")
     if not sample_rate:
         raise ValueError(f"utterance {getattr(utterance, 'id', '?')} has no sample rate")
-    bytes_per_second = int(sample_rate) * int(channels) * int(sample_width_bytes)
-    if bytes_per_second <= 0:
-        raise ValueError(f"utterance {getattr(utterance, 'id', '?')} has invalid audio params")
-    return len(blob) / float(bytes_per_second)
+    return len(blob) / float(int(sample_rate) * _CHANNELS * _BYTES_PER_SAMPLE)
 
 
 def split_transcription_by_utterance(
@@ -71,8 +68,6 @@ def split_transcription_by_utterance(
     utterances,
     *,
     silence_seconds=3.0,
-    sample_width_bytes=_DEFAULT_SAMPLE_WIDTH_BYTES,
-    channels=_DEFAULT_CHANNELS,
 ):
     """Split a combined-file transcription back into per-utterance results.
 
@@ -93,7 +88,7 @@ def split_transcription_by_utterance(
     windows = []
     t = 0.0
     for u in utterances:
-        dur_s = _utterance_seconds(u, sample_width_bytes=sample_width_bytes, channels=channels)
+        dur_s = _utterance_seconds(u)
         start = t
         end = start + dur_s
         windows.append((u.id, start, end))

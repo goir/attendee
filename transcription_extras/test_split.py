@@ -1,4 +1,4 @@
-"""Reproduction + verification for utterance-splitting.
+"""Verification for the hardened utterance-splitter.
 
 Django-free on purpose: these run with bare ``python -m unittest`` (and under the
 repo's ``pytest``) without Postgres, Django settings, or the transcription
@@ -6,15 +6,10 @@ service. They feed the split helper a hand-built service response — the same
 shape ``whisperx_group_client._parse_done_response`` produces — and assert how
 words land on utterances.
 
-``_legacy_split`` is a faithful copy of the current upstream
-``bots.transcription_utils.split_transcription_by_utterance`` (the
-"first overlapping window, then break" loop with duration_ms windows). It is the
-drift witness in WindowDriftTests.
-
-The hardened ``transcription_extras.split`` derives windows from the real encoded
-audio length and buckets each word to the window nearest its midpoint, never
-dropping real speech. FirstWordPreservationTests guards the real-data regression
-where an earlier overlap-fraction drop ate the first word of utterances.
+``transcription_extras.split`` derives windows from the real encoded audio length
+and buckets each word to the window nearest its midpoint, never dropping real
+speech. FirstWordPreservationTests guards the real-data regression where an
+earlier overlap-fraction drop ate the first word of utterances.
 """
 
 import unittest
@@ -33,7 +28,7 @@ def _pcm(seconds):
 
 def _utt(id, duration_ms, *, blob_seconds=None):
     """Stand-in utterance. `blob_seconds` lets the encoded length differ from
-    duration_ms to exercise drift; defaults to duration_ms (no drift)."""
+    duration_ms; defaults to duration_ms."""
     seconds = (duration_ms / 1000.0) if blob_seconds is None else blob_seconds
     blob = _pcm(seconds)
     return SimpleNamespace(
@@ -42,47 +37,6 @@ def _utt(id, duration_ms, *, blob_seconds=None):
         get_audio_blob=lambda blob=blob: blob,
         get_sample_rate=lambda: _SAMPLE_RATE,
     )
-
-
-def _legacy_split(transcription_result, utterances, *, silence_seconds=3.0):
-    """Verbatim copy of upstream split_transcription_by_utterance."""
-    utterances = list(utterances)
-    if not utterances:
-        return {}
-    language = transcription_result.get("language")
-    words = transcription_result.get("words") or []
-
-    windows = []
-    t = 0.0
-    for u in utterances:
-        dur_s = u.duration_ms / 1000.0
-        start = t
-        end = start + dur_s
-        windows.append((u.id, start, end))
-        t = end + silence_seconds
-
-    output = {u.id: {"transcript": "", "words": [], "language": language} for u in utterances}
-
-    word_index = 0
-    for window_index, (utterance_id, start, end) in enumerate(windows):
-        utterance_words = []
-        next_start = windows[window_index + 1][1] if window_index + 1 < len(windows) else None
-        while word_index < len(words):
-            w = words[word_index]
-            if w["start"] >= end:
-                break
-            if w["end"] > start:
-                if next_start is not None and w["end"] > next_start:
-                    pass  # upstream logs + skips
-                else:
-                    wa = dict(w)
-                    wa["start"] = wa["start"] - start
-                    wa["end"] = wa["end"] - start
-                    utterance_words.append(wa)
-            word_index += 1
-        output[utterance_id]["words"] = utterance_words
-        output[utterance_id]["transcript"] = " ".join(w["word"] for w in utterance_words)
-    return output
 
 
 def _words(*triples):
@@ -94,19 +48,14 @@ def _all_words(result):
 
 
 class NormalCaseTests(unittest.TestCase):
-    def test_clean_split_matches_legacy(self):
+    def test_clean_split(self):
         utts = [_utt(1, 2000), _utt(2, 2000)]
         # File: u1 [0,2)  gap [2,3.5)  u2 [3.5,5.5)
         result = {"language": "de", "words": _words(("hallo", 0.5, 1.0), ("welt", 4.0, 4.5))}
-
-        legacy = _legacy_split(result, utts, silence_seconds=1.5)
         new = split_transcription_by_utterance(result, utts, silence_seconds=1.5)
-
-        self.assertEqual(legacy[1]["transcript"], "hallo")
         self.assertEqual(new[1]["transcript"], "hallo")
-        self.assertEqual(legacy[2]["transcript"], "welt")
         self.assertEqual(new[2]["transcript"], "welt")
-        self.assertAlmostEqual(new[2]["words"][0]["start"], 0.5)  # 4.0 - 3.5
+        self.assertAlmostEqual(new[2]["words"][0]["start"], 0.5)  # 4.0 - 3.5 window start
 
     def test_empty_utterances_returns_empty(self):
         self.assertEqual(split_transcription_by_utterance({"words": []}, []), {})
@@ -159,23 +108,14 @@ class GapWordAssignmentTests(unittest.TestCase):
         self.assertEqual(new[2]["transcript"], "x")
 
 
-class WindowDriftTests(unittest.TestCase):
-    """duration_ms under-reports the real encoded audio length: legacy (duration_ms
-    windows) drops a boundary word; the override (blob-length windows) keeps it."""
+class WindowFromEncodedAudioTests(unittest.TestCase):
+    """Windows come from the real encoded PCM length, not the rounded duration_ms:
+    a word just past the duration_ms boundary but inside the real audio stays put."""
 
-    def setUp(self):
-        self.utts = [_utt(1, 2000, blob_seconds=2.05), _utt(2, 2000, blob_seconds=2.05)]
-        self.result = {
-            "language": "de",
-            "words": _words(("hallo", 0.5, 1.0), ("ende", 2.02, 2.04), ("welt", 4.0, 4.5)),
-        }
-
-    def test_legacy_drops_boundary_word_due_to_drift(self):
-        legacy = _legacy_split(self.result, self.utts, silence_seconds=1.5)
-        self.assertNotIn("ende", _all_words(legacy))
-
-    def test_override_keeps_boundary_word(self):
-        new = split_transcription_by_utterance(self.result, self.utts, silence_seconds=1.5)
+    def test_keeps_word_just_past_duration_ms_boundary(self):
+        utts = [_utt(1, 2000, blob_seconds=2.05), _utt(2, 2000, blob_seconds=2.05)]
+        result = {"language": "de", "words": _words(("hallo", 0.5, 1.0), ("ende", 2.02, 2.04), ("welt", 4.0, 4.5))}
+        new = split_transcription_by_utterance(result, utts, silence_seconds=1.5)
         self.assertEqual(new[1]["transcript"], "hallo ende")
 
 
