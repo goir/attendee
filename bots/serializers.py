@@ -1,4 +1,5 @@
 import base64
+import copy
 import json
 import logging
 import os
@@ -1259,8 +1260,17 @@ class CreateBotSerializer(BotValidationMixin, serializers.Serializer):
         if value is None:
             return value
 
+        schema = self.WEBHOOKS_SCHEMA
+        if not settings.REQUIRE_HTTPS_WEBHOOKS:
+            # Deployment opted out of the https requirement (e.g. in-cluster
+            # delivery to an internal service over http). Mirror the same gate
+            # validate_webhook_data() applies so the create path doesn't reject
+            # the URL before it gets there.
+            schema = copy.deepcopy(self.WEBHOOKS_SCHEMA)
+            schema["items"]["properties"]["url"]["pattern"] = "^https?://.*"
+
         try:
-            jsonschema.validate(instance=value, schema=self.WEBHOOKS_SCHEMA)
+            jsonschema.validate(instance=value, schema=schema)
         except jsonschema.exceptions.ValidationError as e:
             raise serializers.ValidationError(e.message)
 
