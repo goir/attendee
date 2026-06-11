@@ -1,0 +1,47 @@
+{% extends "admin/base_site.html" %}
+{% load i18n admin_urls static %}
+
+{% block extrahead %}{{ block.super }}
+<script type="text/javascript" src="{% url 'admin:jsi18n' %}"></script>
+{{ form.media }}
+{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">{% trans 'Home' %}</a>
+  &rsaquo; <a href="{{ cancel_url }}">{{ opts.verbose_name_plural|capfirst }}</a>
+  &rsaquo; {{ title }}
+</div>
+{% endblock %}
+
+{% block content %}
+<div id="content-main">
+  <form method="post">
+    {% csrf_token %}
+    {% for obj in queryset %}
+      <input type="hidden" name="{{ action_checkbox_name }}" value="{{ obj.pk }}">
+    {% endfor %}
+    <input type="hidden" name="action" value="{{ action_name }}">
+    <fieldset class="module aligned">
+      <h2>{{ title }}</h2>
+      {% if description %}
+        <div class="form-row"><div class="help">{{ description|safe }}</div></div>
+      {% endif %}
+      <div class="form-row"><div class="help"><strong>Selected bots:</strong> {{ bot_summary }}</div></div>
+      {% for field in form %}
+        <div class="form-row{% if field.errors %} errors{% endif %}">
+          <div class="field-box">
+            {{ field.errors }}
+            {{ field.label_tag }} {{ field }}
+            {% if field.help_text %}<div class="help">{{ field.help_text|safe }}</div>{% endif %}
+          </div>
+        </div>
+      {% endfor %}
+    </fieldset>
+    <div class="submit-row">
+      <input type="submit" name="apply" value="{{ submit_label }}" class="default">
+      <a href="{{ cancel_url }}" class="closelink">{% trans 'Cancel' %}</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

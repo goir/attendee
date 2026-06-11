@@ -104,11 +104,16 @@ def make_readonly_admin(model):
         else:
             ordered_fields.append(field.name)
 
+    # Append many-to-many fields (rendered read-only as a comma list) so the
+    # admin surfaces *every* model field, not just the concrete/local ones.
+    m2m_names = [f.name for f in model._meta.many_to_many]
+
     # Use the same ordered list for `fields` and `readonly_fields`. This keeps
     # every value read-only AND guarantees the raw sensitive field is never
     # rendered as an editable widget (only the masked accessor appears).
-    attrs["fields"] = tuple(ordered_fields)
-    attrs["readonly_fields"] = tuple(ordered_fields)
+    all_fields = tuple(ordered_fields) + tuple(m2m_names)
+    attrs["fields"] = all_fields
+    attrs["readonly_fields"] = all_fields
     attrs["list_display"] = _build_list_display(field_names)
 
     search_fields = tuple(name for name in _SEARCH_CANDIDATES if isinstance(field_names.get(name), (models.CharField, models.TextField)))

@@ -42,9 +42,69 @@ git checkout main && git merge --ff-only upstream/main
 
 | # | Commit | Summary | Touches upstream files? | PR-ready? |
 |---|--------|---------|--------------------------|-----------|
+| 5 | _uncommitted_ | **Editable** `User` & `Organization` admins (permissions + every model field), overriding upstream's read-only ones; read-only auto-admins now also list M2M fields | No (overrides host admins at runtime, in `admin_extras`) | Fork-local (operational tooling) |
+| 4 | _uncommitted_ | Bot admin **operational actions** (recover stuck POST_PROCESSING, dispatch any bot event, start async transcription) added via `admin_extras` | No (augments the host BotAdmin at runtime) | Fork-local (operational tooling) |
 | 3 | _uncommitted_ | `transcription_extras` app: per-speaker, size-capped chunk combining for custom-async transcription | 2 tiny edits (`bots/models.py`, one async task) + `INSTALLED_APPS` line | Fork-local (depends on our WhisperX service) |
 | 2 | `35954a4d` (+ follow-ups) | `admin_extras` app: auto read-only admin for every model; admin datetimes with seconds | 2 lines in `attendee/settings/base.py` (`INSTALLED_APPS`, `FORMAT_MODULE_PATH`) | Mergeable as-is, but niche; likely keep fork-local |
 | 1 | `d76d92bb` | Record-only mode (`disable_realtime_transcription`) | Yes (`bots/*`) | Yes — good upstream candidate |
+
+---
+
+### 5. Editable User & Organization admin (+ all model fields)
+
+- **Why:** Upstream's `accounts/admin.py` makes `User` and `Organization` **read-only** (every field
+  in `readonly_fields`, add/change/delete disabled). We need to actually administer them — edit user
+  **permissions** (`is_staff` / `is_superuser` / `groups` / `user_permissions`) and all other
+  properties, and edit all Organization settings.
+- **What:** `admin_extras` re-registers both models as **fully editable**, exposing **every** model
+  field — without editing upstream `accounts/admin.py` (stays rebaseable):
+  - `EditableUserAdmin` subclasses Django's auth `UserAdmin` (proper password + permission widgets,
+    `filter_horizontal` groups/permissions), with fieldsets extended to the custom fields
+    (`organization`, `invited_by`, `role`, `object_id`) and add/change/delete re-enabled.
+  - `EditableOrganizationAdmin` subclasses the host `OrganizationAdmin` (so the "Add Credit
+    Transaction" button/view is preserved) but flips the read-only gates and builds its field list
+    dynamically from `_meta.fields`, so all current **and future** Organization fields show up.
+  - Generic read-only auto-admins now also list **many-to-many** fields (read-only), so every model
+    surfaces all of its fields.
+- **Files (all in the `admin_extras` app — zero upstream edits):**
+  - `admin_extras/editable_admins.py` — the two editable admins + `register_editable_admins()`.
+  - `admin_extras/admin.py` — one call to `register_editable_admins()` after the read-only pass.
+  - `admin_extras/registration.py` — `make_readonly_admin` appends `_meta.many_to_many`.
+  - `admin_extras/tests.py` — assert both admins are editable and expose all fields.
+- **Caveat:** editing `Organization.centicredits` directly bypasses the `CreditTransaction` audit
+  trail — use the preserved "Add Credit Transaction" button when you want a recorded transaction.
+- **Verify:** `python manage.py check`; `python manage.py test admin_extras`.
+
+---
+
+### 4. Bot admin operational actions (event dispatch + async transcription)
+
+- **Why:** When a recorder pod crashes mid post-processing, the bot is left stuck in
+  `POST_PROCESSING` and there is no UI to move it on. The async-transcription API also refuses
+  unless the bot is `ENDED` (`Cannot create async transcription because bot is not in state ended`).
+  We need a hands-on way to drive the state machine and (re)start transcription from the admin.
+- **What:** Three Django **admin actions** on the Bot changelist:
+  - **Recover stuck POST_PROCESSING** — one click sends `POST_PROCESSING_COMPLETED`
+    (`POST_PROCESSING → ENDED`) via `BotEventManager.create_event`.
+  - **Dispatch bot event…** — intermediate form to send *any* `BotEventTypes` event (optional
+    sub-type + JSON metadata). The real state-machine validation applies; invalid transitions are
+    reported per-bot, never silently applied.
+  - **Start async transcription…** — intermediate form taking provider `transcription_settings`
+    (same schema as `POST /transcript`). Mirrors the API's guards (org-enabled, audio chunks
+    present, `ENDED`, max-per-recording) then `process_async_transcription.delay(...)`.
+- **Files (all new, in the `admin_extras` app — zero upstream edits):**
+  - `admin_extras/bot_admin.py` — forms, `BotActionsMixin`, and `augment_bot_admin()`, which
+    unregisters the host `BotAdmin` and re-registers a subclass mixing the actions in. Keeps
+    upstream `bots/admin.py` untouched and rebaseable.
+  - `admin_extras/templates/admin_extras/action_form.html` — reusable intermediate-page template.
+  - `admin_extras/admin.py` — one call to `augment_bot_admin()` after `register_readonly_admins`.
+  - `admin_extras/tests.py` — augmentation + transition (valid/invalid) + intermediate-page tests.
+- **Note:** the host `BotAdmin` forces `has_change_permission=False`, so these actions are **not**
+  gated on the change permission (that would disable them outright); they're available to anyone
+  who can view the Bot changelist (internal/superuser admin).
+- **Rebase notes:** Nothing touches upstream. If upstream later renames `BotEventManager`/event
+  enums, only `admin_extras/bot_admin.py` needs updating. New files → no merge conflicts.
+- **Verify:** `python manage.py check`; `python manage.py test admin_extras`.
 
 ---
 
