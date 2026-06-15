@@ -61,6 +61,40 @@ class NormalCaseTests(unittest.TestCase):
         self.assertEqual(split_transcription_by_utterance({"words": []}, []), {})
 
 
+class ConfidenceForwardingTests(unittest.TestCase):
+    """The added confidence scores must be kept: word confidence rides on each word,
+    per-utterance confidence maps 1:1 by position, language_confidence is global."""
+
+    def test_maps_utterance_confidence_1to1_and_language_confidence_globally(self):
+        utts = [_utt(1, 2000), _utt(2, 2000)]  # u1 [0,2) gap [2,3.5) u2 [3.5,5.5)
+        result = {
+            "language": "de",
+            "language_confidence": 0.97,
+            "utterance_confidences": [0.81, 0.62],
+            "words": [
+                {"word": "hallo", "start": 0.5, "end": 1.0, "confidence": 0.9},
+                {"word": "welt", "start": 4.0, "end": 4.5, "confidence": 0.7},
+            ],
+        }
+        new = split_transcription_by_utterance(result, utts, silence_seconds=1.5)
+        # language_confidence is transcription-global -> every utterance carries it.
+        self.assertEqual(new[1]["language_confidence"], 0.97)
+        self.assertEqual(new[2]["language_confidence"], 0.97)
+        # per-utterance confidence mapped by position.
+        self.assertEqual(new[1]["confidence"], 0.81)
+        self.assertEqual(new[2]["confidence"], 0.62)
+        # per-word confidence preserved untouched.
+        self.assertEqual(new[1]["words"][0]["confidence"], 0.9)
+        self.assertEqual(new[2]["words"][0]["confidence"], 0.7)
+
+    def test_missing_confidence_fields_default_to_none(self):
+        utts = [_utt(1, 2000)]
+        result = {"language": "de", "words": _words(("a", 0.5, 0.8))}
+        new = split_transcription_by_utterance(result, utts, silence_seconds=1.5)
+        self.assertIsNone(new[1]["confidence"])
+        self.assertIsNone(new[1]["language_confidence"])
+
+
 class FirstWordPreservationTests(unittest.TestCase):
     """Real-data regression: the first word of an utterance, timestamped slightly
     before its window start (it bled into the leading silence gap), must be KEPT,

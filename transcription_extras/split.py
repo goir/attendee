@@ -31,9 +31,13 @@ exposing ``id``, ``get_audio_blob()`` and ``get_sample_rate()`` — the real
 solely from the actual encoded audio. This keeps it unit-testable without a
 database or the transcription service.
 
-The return contract matches upstream exactly:
-    { utterance_id: {"transcript": str, "words": [...], "language": str|None} }
-with each word's ``start``/``end`` re-based to its own utterance's start.
+The return contract extends upstream with the forwarded confidence scores:
+    { utterance_id: {"transcript": str, "words": [...], "language": str|None,
+                     "language_confidence": float|None, "confidence": float|None} }
+with each word's ``start``/``end`` re-based to its own utterance's start (each word also
+keeps its own ``confidence``). ``confidence`` is the matching service utterance's score
+(mapped 1:1 by position); ``language``/``language_confidence`` are transcription-global,
+so every utterance carries them.
 """
 
 import logging
@@ -82,7 +86,20 @@ def split_transcription_by_utterance(
         return {}
 
     language = transcription_result.get("language")
+    language_confidence = transcription_result.get("language_confidence")
     words = transcription_result.get("words") or []
+    # Per-utterance confidence, in the order the service returned its utterances. Each
+    # combined file appends the sub-group's utterances with a fixed silence gap, so the
+    # service emits one utterance per appended utterance, in the SAME order as
+    # ``utterances`` here — a clean 1:1 mapping back onto the Attendee utterances.
+    utterance_confidences = transcription_result.get("utterance_confidences") or []
+    if utterance_confidences and len(utterance_confidences) != len(utterances):
+        logger.warning(
+            "transcription_extras.split: %d service utterance confidence(s) for %d utterance(s); "
+            "per-utterance confidence may be misaligned",
+            len(utterance_confidences),
+            len(utterances),
+        )
 
     # Build utterance time windows in the combined audio, from real encoded length.
     windows = []
@@ -94,7 +111,19 @@ def split_transcription_by_utterance(
         windows.append((u.id, start, end))
         t = end + silence_seconds
 
-    output = {u.id: {"transcript": "", "words": [], "language": language} for u in utterances}
+    # ``language``/``language_confidence`` are transcription-global, so every utterance
+    # carries them; ``confidence`` is the matching service utterance's own score (1:1 by
+    # position, ``None`` if the service returned fewer utterances than we appended).
+    output = {
+        u.id: {
+            "transcript": "",
+            "words": [],
+            "language": language,
+            "language_confidence": language_confidence,
+            "confidence": utterance_confidences[index] if index < len(utterance_confidences) else None,
+        }
+        for index, u in enumerate(utterances)
+    }
     buckets = {u.id: [] for u in utterances}
 
     skipped = 0

@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 def get_transcription_for_utterance_group(utterances):
-    """Return ({utterance_id: {"transcript","words","language"}}, failure_data).
+    """Return ({utterance_id: {"transcript","words","language","language_confidence","confidence"}}, failure_data).
 
     On the first sub-group failure, returns (None, failure_data) so the whole group is
     retried/failed as a unit — matching the AssemblyAI group path.

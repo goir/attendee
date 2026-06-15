@@ -75,6 +75,29 @@ class ParseResponseTests(SimpleTestCase):
         self.assertEqual(parsed["transcript"], "hello world")
         self.assertEqual([w["word"] for w in parsed["words"]], ["hello", "world"])
 
+    def test_parse_forwards_all_confidence_scores(self):
+        # word/start/end unchanged; the added confidence scores must all pass through.
+        result_data = {
+            "status": "done",
+            "result": {"transcription": {
+                "full_transcript": "hello world",
+                "language": "de",
+                "language_confidence": 1.0,
+                "utterances": [
+                    {"confidence": 0.86, "words": [{"word": "hello", "start": 0.5, "end": 1.0, "confidence": 0.91}]},
+                    {"confidence": 0.73, "words": [{"word": "world", "start": 4.0, "end": 4.5, "confidence": 0.64}]},
+                ],
+            }},
+        }
+        parsed = _parse_done_response(result_data)
+        self.assertEqual(parsed["transcript"], "hello world")
+        self.assertEqual(parsed["language"], "de")
+        self.assertEqual(parsed["language_confidence"], 1.0)
+        # Per-utterance confidence kept in order for 1:1 mapping by the splitter.
+        self.assertEqual(parsed["utterance_confidences"], [0.86, 0.73])
+        # Per-word confidence rides along on each word untouched.
+        self.assertEqual([w["confidence"] for w in parsed["words"]], [0.91, 0.64])
+
 
 class EndToEndSplitTests(SimpleTestCase):
     @mock.patch.dict("os.environ", {config.TRANSCRIPTION_URL_ENV: "https://whisperx.example/attendee/transcribe"})
@@ -91,13 +114,13 @@ class EndToEndSplitTests(SimpleTestCase):
         response_a = mock.Mock(status_code=200)
         response_a.json.return_value = {
             "status": "done",
-            "result": {"transcription": {"full_transcript": "hi there", "utterances": [{"words": [{"word": "hi", "start": 0.5, "end": 1.0}]}, {"words": [{"word": "there", "start": 4.0, "end": 4.5}]}]}},
+            "result": {"transcription": {"full_transcript": "hi there", "language": "de", "language_confidence": 0.95, "utterances": [{"confidence": 0.8, "words": [{"word": "hi", "start": 0.5, "end": 1.0, "confidence": 0.9}]}, {"confidence": 0.7, "words": [{"word": "there", "start": 4.0, "end": 4.5, "confidence": 0.6}]}]}},
         }
         # File B: u3 window [0,4).
         response_b = mock.Mock(status_code=200)
         response_b.json.return_value = {
             "status": "done",
-            "result": {"transcription": {"full_transcript": "bye", "utterances": [{"words": [{"word": "bye", "start": 1.0, "end": 1.5}]}]}},
+            "result": {"transcription": {"full_transcript": "bye", "language": "de", "language_confidence": 0.99, "utterances": [{"confidence": 0.6, "words": [{"word": "bye", "start": 1.0, "end": 1.5, "confidence": 0.8}]}]}},
         }
 
         with mock.patch.object(group_transcription, "get_mp3_for_utterance_group", return_value=b"fake-mp3") as mock_mp3, mock.patch("transcription_extras.whisperx_group_client.requests.post", side_effect=[response_a, response_b]) as mock_post:
@@ -114,6 +137,15 @@ class EndToEndSplitTests(SimpleTestCase):
         self.assertEqual(transcriptions[3]["transcript"], "bye")
         self.assertAlmostEqual(transcriptions[1]["words"][0]["start"], 0.5)
         self.assertAlmostEqual(transcriptions[2]["words"][0]["start"], 0.5)  # 4.0 - 3.5 window start
+        # Per-word confidence is preserved untouched on each word.
+        self.assertEqual(transcriptions[1]["words"][0]["confidence"], 0.9)
+        self.assertEqual(transcriptions[2]["words"][0]["confidence"], 0.6)
+        # Per-utterance confidence maps 1:1 by position; language_confidence is global.
+        self.assertEqual(transcriptions[1]["confidence"], 0.8)
+        self.assertEqual(transcriptions[2]["confidence"], 0.7)
+        self.assertEqual(transcriptions[3]["confidence"], 0.6)
+        self.assertEqual(transcriptions[1]["language_confidence"], 0.95)
+        self.assertEqual(transcriptions[3]["language_confidence"], 0.99)
 
     @mock.patch.dict("os.environ", {config.TRANSCRIPTION_URL_ENV: "https://whisperx.example/attendee/transcribe"})
     def test_combined_path_keeps_first_word_at_window_edge(self):
@@ -162,7 +194,7 @@ def _transcribed_utt(id, participant_name, timestamp_ms, transcript, words=None)
         participant=SimpleNamespace(full_name=participant_name, uuid=f"uuid-{id}"),
         timestamp_ms=timestamp_ms,
         duration_ms=1000,
-        transcription={"transcript": transcript, "words": words or [], "language": "en"} if transcript is not None else None,
+        transcription={"transcript": transcript, "words": words or [], "language": "en", "language_confidence": 0.99, "confidence": 0.88} if transcript is not None else None,
     )
 
 
@@ -229,7 +261,10 @@ class TranscriptExportTests(SimpleTestCase):
     def test_transcript_json_includes_words_and_speaker(self):
         from transcription_extras.transcript_export import transcript_json
 
-        rows = transcript_json([_transcribed_utt(1, "Alice", 0, "hello", words=[{"word": "hello", "start": 0.1, "end": 0.5}])])
+        rows = transcript_json([_transcribed_utt(1, "Alice", 0, "hello", words=[{"word": "hello", "start": 0.1, "end": 0.5, "confidence": 0.9}])])
         self.assertEqual(rows[0]["speaker"], "Alice")
         self.assertEqual(rows[0]["transcript"], "hello")
         self.assertEqual(rows[0]["words"][0]["word"], "hello")
+        self.assertEqual(rows[0]["words"][0]["confidence"], 0.9)
+        self.assertEqual(rows[0]["language_confidence"], 0.99)
+        self.assertEqual(rows[0]["confidence"], 0.88)

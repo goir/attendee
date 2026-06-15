@@ -60,6 +60,8 @@ def transcript_json(utterances):
                 "transcript": transcription.get("transcript", ""),
                 "words": transcription.get("words", []),
                 "language": transcription.get("language"),
+                "language_confidence": transcription.get("language_confidence"),
+                "confidence": transcription.get("confidence"),
             }
         )
     return rows

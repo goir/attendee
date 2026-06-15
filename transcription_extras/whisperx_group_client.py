@@ -7,8 +7,14 @@ intentionally duplicated here (a few lines) so the upstream module stays untouch
 Response contract (``POST /attendee/transcribe``):
     {"status": "done",
      "result": {"transcription": {"full_transcript": str,
-                                  "utterances": [{"words": [{"word","start","end"}]}]}}}
-Word ``start``/``end`` are floats in SECONDS, relative to the uploaded file.
+                                  "language": str|None,
+                                  "language_confidence": float|None,
+                                  "utterances": [{"confidence": float|None,
+                                                  "words": [{"word","start","end","confidence"}]}]}}}
+Word ``start``/``end`` are floats in SECONDS, relative to the uploaded file. Every
+transcription-level field is forwarded; ``utterances`` is flattened to a single ``words``
+list while the per-utterance ``confidence`` is kept (in order) so the splitter can map it
+1:1 back onto the appended utterances.
 """
 
 import json
@@ -94,11 +100,28 @@ def transcribe_combined_mp3(mp3_bytes, *, headers, data, identifier):
 
 
 def _parse_done_response(result_data):
-    transcription = result_data.get("result", {}).get("transcription", {}) or {}
+    """Flatten the service response, forwarding every transcription field.
+
+    Mirrors the single-chunk custom-async parse: keep the whole ``transcription``
+    object (so ``language``, ``language_confidence`` and any future top-level field
+    pass through), rename ``full_transcript`` -> ``transcript`` and flatten
+    ``utterances`` -> a single ``words`` list. Word/start/end are unchanged; only the
+    confidence scores were added. Per-word ``confidence`` rides along on each word
+    untouched; the per-utterance ``confidence`` is collected in order
+    (``utterance_confidences``) so the splitter can map it 1:1 back onto the appended
+    utterances (one service utterance per gap-separated Attendee utterance).
+    """
+    transcription = dict(result_data.get("result", {}).get("transcription", {}) or {})
+    service_utterances = transcription.pop("utterances", None) or []
     words = []
-    for utt in transcription.get("utterances", []) or []:
+    utterance_confidences = []
+    for utt in service_utterances:
         words.extend(utt.get("words", []) or [])
-    return {"transcript": transcription.get("full_transcript", ""), "words": words, "language": transcription.get("language")}
+        utterance_confidences.append(utt.get("confidence"))
+    transcription["transcript"] = transcription.pop("full_transcript", "")
+    transcription["words"] = words
+    transcription["utterance_confidences"] = utterance_confidences
+    return transcription
 
 
 def _serialize_form_data(form_data):
