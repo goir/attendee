@@ -77,9 +77,9 @@ class BotEventDispatchForm(forms.Form):
 class StartAsyncTranscriptionForm(forms.Form):
     transcription_settings = forms.JSONField(
         label="Transcription settings",
-        initial={"deepgram": {"model": "nova-3", "language": "en"}},
+        initial={"custom_async_v2": {"language": "de"}},
         help_text='Provider settings — same schema as the POST /transcript API. '
-        'Examples: {"deepgram": {"model": "nova-3", "language": "en"}}, '
+        'Examples: {"custom_async_v2": {"language": "de"}}, '
         '{"openai": {"model": "whisper-1"}}, {"assembly_ai": {"language_code": "en"}}.',
     )
 

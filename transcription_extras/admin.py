@@ -18,7 +18,7 @@ from django.utils.html import format_html
 from bots.models import AsyncTranscription
 
 from .transcript_export import transcript_json, transcript_text
-
+ 
 logger = logging.getLogger(__name__)
 
 PREVIEW_CHAR_LIMIT = 5000
