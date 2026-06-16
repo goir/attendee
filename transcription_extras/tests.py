@@ -270,3 +270,16 @@ class TranscriptExportTests(SimpleTestCase):
         self.assertEqual(rows[0]["words"][0]["confidence"], 0.9)
         self.assertEqual(rows[0]["language_confidence"], 0.99)
         self.assertEqual(rows[0]["confidence"], 0.88)
+
+    def test_transcript_json_skips_empty_and_pending(self):
+        from transcription_extras.transcript_export import transcript_json
+
+        # Silence utterances (empty transcript) and not-yet-transcribed ones (None) are
+        # dropped — same rule as transcript_text — so only real speech is exported.
+        utts = [
+            _transcribed_utt(1, "Alice", 0, "hello"),
+            _transcribed_utt(2, "Bob", 1000, ""),
+            _transcribed_utt(3, "Cara", 2000, None),
+        ]
+        rows = transcript_json(utts)
+        self.assertEqual([r["utterance_id"] for r in rows], [1])

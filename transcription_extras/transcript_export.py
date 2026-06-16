@@ -47,10 +47,18 @@ def transcript_text(utterances):
 
 
 def transcript_json(utterances):
-    """Structured export: one row per utterance, including word-level timings."""
+    """Structured export: one row per utterance WITH actual speech, including word-level
+    timings.
+
+    Utterances the service returned empty — silence / no speech detected, so an empty
+    ``transcript`` and no ``words`` — are skipped, the same rule ``transcript_lines`` uses,
+    so the export only carries real transcriptions instead of one row per recorded chunk.
+    """
     rows = []
     for utterance in utterances:
         transcription = getattr(utterance, "transcription", None) or {}
+        if not (transcription.get("transcript") or "").strip():
+            continue
         rows.append(
             {
                 "utterance_id": getattr(utterance, "id", None),
