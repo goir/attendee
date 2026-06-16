@@ -69,8 +69,6 @@ def transcribe_combined_mp3(mp3_bytes, *, headers, data, identifier):
         response = requests.post(base_url, files=files, data=data or None, headers=headers or None, timeout=timeout)
         elapsed = time.monotonic() - started_at
         logger.info("transcription_extras: response %d for %s in %.2fs", response.status_code, identifier, elapsed)
-        res = response.json()
-        logger.info("transcription_extras: response: %s", res)
 
         if response.status_code == 401:
             return None, {"reason": TranscriptionFailureReasons.CREDENTIALS_INVALID}
@@ -80,7 +78,7 @@ def transcribe_combined_mp3(mp3_bytes, *, headers, data, identifier):
             logger.warning("transcription_extras: non-200 (%d) for %s: %s", response.status_code, identifier, response.text[:500])
             return None, {"reason": TranscriptionFailureReasons.TRANSCRIPTION_REQUEST_FAILED, "status_code": response.status_code, "response_text": response.text}
 
-        result_data = res
+        result_data = response.json()
     except requests.exceptions.Timeout:
         logger.warning("transcription_extras: request timed out after %ds for %s", timeout, identifier)
         return None, {"reason": TranscriptionFailureReasons.TIMED_OUT, "timeout": timeout}
