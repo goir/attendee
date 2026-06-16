@@ -62,37 +62,64 @@ class NormalCaseTests(unittest.TestCase):
 
 
 class ConfidenceForwardingTests(unittest.TestCase):
-    """The added confidence scores must be kept: word confidence rides on each word,
-    per-utterance confidence maps 1:1 by position, language_confidence is global."""
+    """Confidence scores must be kept and correctly attributed: word confidence rides on
+    each word; per-utterance confidence is the MEAN of that utterance's bucketed word
+    confidences (the service re-segments, so a positional map is unsound);
+    language_confidence is transcription-global."""
 
-    def test_maps_utterance_confidence_1to1_and_language_confidence_globally(self):
+    def test_utterance_confidence_is_mean_of_its_word_confidences(self):
         utts = [_utt(1, 2000), _utt(2, 2000)]  # u1 [0,2) gap [2,3.5) u2 [3.5,5.5)
         result = {
             "language": "de",
             "language_confidence": 0.97,
-            "utterance_confidences": [0.81, 0.62],
             "words": [
                 {"word": "hallo", "start": 0.5, "end": 1.0, "confidence": 0.9},
-                {"word": "welt", "start": 4.0, "end": 4.5, "confidence": 0.7},
+                {"word": "welt", "start": 1.2, "end": 1.5, "confidence": 0.7},
+                {"word": "tag", "start": 4.0, "end": 4.5, "confidence": 0.6},
             ],
         }
         new = split_transcription_by_utterance(result, utts, silence_seconds=1.5)
         # language_confidence is transcription-global -> every utterance carries it.
         self.assertEqual(new[1]["language_confidence"], 0.97)
         self.assertEqual(new[2]["language_confidence"], 0.97)
-        # per-utterance confidence mapped by position.
-        self.assertEqual(new[1]["confidence"], 0.81)
-        self.assertEqual(new[2]["confidence"], 0.62)
+        # per-utterance confidence = mean of the words that landed on it.
+        self.assertEqual(new[1]["confidence"], 0.8)  # mean(0.9, 0.7)
+        self.assertEqual(new[2]["confidence"], 0.6)  # mean(0.6)
         # per-word confidence preserved untouched.
         self.assertEqual(new[1]["words"][0]["confidence"], 0.9)
-        self.assertEqual(new[2]["words"][0]["confidence"], 0.7)
+        self.assertEqual(new[2]["words"][0]["confidence"], 0.6)
+
+    def test_confidence_follows_words_not_service_segment_count(self):
+        # Real-data shape: the service emits FEWER segments than appended utterances, so
+        # there is no positional confidence to map. Each utterance's confidence is derived
+        # purely from the words bucketed onto it.
+        utts = [_utt(1, 2000), _utt(2, 2000)]  # u1 [0,2) gap [2,3.5) u2 [3.5,5.5)
+        result = {
+            "language": "de",
+            "words": [
+                {"word": "a", "start": 0.3, "end": 0.5, "confidence": 0.4},
+                {"word": "b", "start": 1.0, "end": 1.2, "confidence": 0.6},
+                {"word": "c", "start": 4.0, "end": 4.2, "confidence": 1.0},
+            ],
+        }
+        new = split_transcription_by_utterance(result, utts, silence_seconds=1.5)
+        self.assertEqual(new[1]["confidence"], 0.5)  # mean(0.4, 0.6)
+        self.assertEqual(new[2]["confidence"], 1.0)  # mean(1.0)
 
     def test_missing_confidence_fields_default_to_none(self):
         utts = [_utt(1, 2000)]
         result = {"language": "de", "words": _words(("a", 0.5, 0.8))}
         new = split_transcription_by_utterance(result, utts, silence_seconds=1.5)
+        # no word carries a confidence -> utterance confidence is None.
         self.assertIsNone(new[1]["confidence"])
         self.assertIsNone(new[1]["language_confidence"])
+
+    def test_utterance_with_no_words_has_none_confidence(self):
+        utts = [_utt(1, 2000), _utt(2, 2000)]  # u2 [3.5,5.5) gets no words
+        result = {"language": "de", "words": [{"word": "a", "start": 0.5, "end": 0.8, "confidence": 0.9}]}
+        new = split_transcription_by_utterance(result, utts, silence_seconds=1.5)
+        self.assertEqual(new[1]["confidence"], 0.9)
+        self.assertIsNone(new[2]["confidence"])
 
 
 class FirstWordPreservationTests(unittest.TestCase):

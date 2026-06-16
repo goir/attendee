@@ -75,8 +75,9 @@ class ParseResponseTests(SimpleTestCase):
         self.assertEqual(parsed["transcript"], "hello world")
         self.assertEqual([w["word"] for w in parsed["words"]], ["hello", "world"])
 
-    def test_parse_forwards_all_confidence_scores(self):
-        # word/start/end unchanged; the added confidence scores must all pass through.
+    def test_parse_forwards_word_confidence_and_drops_segment_confidence(self):
+        # word/start/end unchanged; per-word confidence passes through, and the service's
+        # per-segment confidence is dropped (the splitter re-derives it from the words).
         result_data = {
             "status": "done",
             "result": {"transcription": {
@@ -93,8 +94,8 @@ class ParseResponseTests(SimpleTestCase):
         self.assertEqual(parsed["transcript"], "hello world")
         self.assertEqual(parsed["language"], "de")
         self.assertEqual(parsed["language_confidence"], 1.0)
-        # Per-utterance confidence kept in order for 1:1 mapping by the splitter.
-        self.assertEqual(parsed["utterance_confidences"], [0.86, 0.73])
+        # The service's per-segment confidence is not forwarded.
+        self.assertNotIn("utterance_confidences", parsed)
         # Per-word confidence rides along on each word untouched.
         self.assertEqual([w["confidence"] for w in parsed["words"]], [0.91, 0.64])
 
@@ -140,10 +141,11 @@ class EndToEndSplitTests(SimpleTestCase):
         # Per-word confidence is preserved untouched on each word.
         self.assertEqual(transcriptions[1]["words"][0]["confidence"], 0.9)
         self.assertEqual(transcriptions[2]["words"][0]["confidence"], 0.6)
-        # Per-utterance confidence maps 1:1 by position; language_confidence is global.
-        self.assertEqual(transcriptions[1]["confidence"], 0.8)
-        self.assertEqual(transcriptions[2]["confidence"], 0.7)
-        self.assertEqual(transcriptions[3]["confidence"], 0.6)
+        # Per-utterance confidence is the mean of that utterance's bucketed words (one
+        # word each here), not the service's per-segment score; language_confidence is global.
+        self.assertEqual(transcriptions[1]["confidence"], 0.9)
+        self.assertEqual(transcriptions[2]["confidence"], 0.6)
+        self.assertEqual(transcriptions[3]["confidence"], 0.8)
         self.assertEqual(transcriptions[1]["language_confidence"], 0.95)
         self.assertEqual(transcriptions[3]["language_confidence"], 0.99)
 

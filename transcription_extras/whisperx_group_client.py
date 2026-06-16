@@ -13,8 +13,10 @@ Response contract (``POST /attendee/transcribe``):
                                                   "words": [{"word","start","end","confidence"}]}]}}}
 Word ``start``/``end`` are floats in SECONDS, relative to the uploaded file. Every
 transcription-level field is forwarded; ``utterances`` is flattened to a single ``words``
-list while the per-utterance ``confidence`` is kept (in order) so the splitter can map it
-1:1 back onto the appended utterances.
+list (each word keeps its own ``confidence``). The service's per-segment ``confidence`` is
+dropped: it re-segments the combined file with its own VAD, so its utterance count does
+not match the appended utterances; the splitter re-derives each utterance's confidence
+from the words it buckets.
 """
 
 import json
@@ -107,22 +109,20 @@ def _parse_done_response(result_data):
     Mirrors the single-chunk custom-async parse: keep the whole ``transcription``
     object (so ``language``, ``language_confidence`` and any future top-level field
     pass through), rename ``full_transcript`` -> ``transcript`` and flatten
-    ``utterances`` -> a single ``words`` list. Word/start/end are unchanged; only the
-    confidence scores were added. Per-word ``confidence`` rides along on each word
-    untouched; the per-utterance ``confidence`` is collected in order
-    (``utterance_confidences``) so the splitter can map it 1:1 back onto the appended
-    utterances (one service utterance per gap-separated Attendee utterance).
+    ``utterances`` -> a single ``words`` list. Word/start/end are unchanged; per-word
+    ``confidence`` rides along on each word untouched. The service's per-segment
+    ``confidence`` is intentionally NOT collected: the service re-segments the combined
+    file with its own VAD, so its utterance count does not line up with the appended
+    utterances; the splitter re-derives each utterance's confidence from the mean of the
+    words it buckets.
     """
     transcription = dict(result_data.get("result", {}).get("transcription", {}) or {})
     service_utterances = transcription.pop("utterances", None) or []
     words = []
-    utterance_confidences = []
     for utt in service_utterances:
         words.extend(utt.get("words", []) or [])
-        utterance_confidences.append(utt.get("confidence"))
     transcription["transcript"] = transcription.pop("full_transcript", "")
     transcription["words"] = words
-    transcription["utterance_confidences"] = utterance_confidences
     return transcription
 
 

@@ -35,9 +35,14 @@ The return contract extends upstream with the forwarded confidence scores:
     { utterance_id: {"transcript": str, "words": [...], "language": str|None,
                      "language_confidence": float|None, "confidence": float|None} }
 with each word's ``start``/``end`` re-based to its own utterance's start (each word also
-keeps its own ``confidence``). ``confidence`` is the matching service utterance's score
-(mapped 1:1 by position); ``language``/``language_confidence`` are transcription-global,
-so every utterance carries them.
+keeps its own ``confidence``). ``confidence`` is the mean of THIS utterance's word
+confidences, re-derived from the words actually bucketed here — NOT read from the
+service's per-utterance scores. The service re-segments the combined file with its own
+VAD and returns a different (smaller) number of utterances than we appended (e.g. 22 for
+58), so a positional 1:1 map is unsound; and its per-segment ``confidence`` is itself just
+the mean of that segment's word probabilities, so re-deriving from words reproduces the
+same metric on OUR boundaries. ``language``/``language_confidence`` are
+transcription-global, so every utterance carries them.
 """
 
 import logging
@@ -67,6 +72,20 @@ def _utterance_seconds(utterance):
     return len(blob) / float(int(sample_rate) * _CHANNELS * _BYTES_PER_SAMPLE)
 
 
+def _mean_word_confidence(words):
+    """Per-utterance confidence = arithmetic mean of its words' ``confidence``.
+
+    WhisperX's own per-segment confidence is the mean of that segment's word
+    probabilities, so averaging the words we bucketed into this utterance reproduces the
+    same number — but aligned to OUR utterance boundary instead of the service's VAD
+    re-segmentation. Returns ``None`` when no bucketed word carries a confidence.
+    """
+    scores = [w["confidence"] for w in words if w.get("confidence") is not None]
+    if not scores:
+        return None
+    return round(sum(scores) / len(scores), 4)
+
+
 def split_transcription_by_utterance(
     transcription_result,
     utterances,
@@ -88,18 +107,6 @@ def split_transcription_by_utterance(
     language = transcription_result.get("language")
     language_confidence = transcription_result.get("language_confidence")
     words = transcription_result.get("words") or []
-    # Per-utterance confidence, in the order the service returned its utterances. Each
-    # combined file appends the sub-group's utterances with a fixed silence gap, so the
-    # service emits one utterance per appended utterance, in the SAME order as
-    # ``utterances`` here — a clean 1:1 mapping back onto the Attendee utterances.
-    utterance_confidences = transcription_result.get("utterance_confidences") or []
-    if utterance_confidences and len(utterance_confidences) != len(utterances):
-        logger.warning(
-            "transcription_extras.split: %d service utterance confidence(s) for %d utterance(s); "
-            "per-utterance confidence may be misaligned",
-            len(utterance_confidences),
-            len(utterances),
-        )
 
     # Build utterance time windows in the combined audio, from real encoded length.
     windows = []
@@ -112,17 +119,17 @@ def split_transcription_by_utterance(
         t = end + silence_seconds
 
     # ``language``/``language_confidence`` are transcription-global, so every utterance
-    # carries them; ``confidence`` is the matching service utterance's own score (1:1 by
-    # position, ``None`` if the service returned fewer utterances than we appended).
+    # carries them; ``confidence`` is filled below, after bucketing, from the words that
+    # actually landed on each utterance.
     output = {
         u.id: {
             "transcript": "",
             "words": [],
             "language": language,
             "language_confidence": language_confidence,
-            "confidence": utterance_confidences[index] if index < len(utterance_confidences) else None,
+            "confidence": None,
         }
-        for index, u in enumerate(utterances)
+        for u in utterances
     }
     buckets = {u.id: [] for u in utterances}
 
@@ -166,6 +173,7 @@ def split_transcription_by_utterance(
     for utterance_id, utterance_words in buckets.items():
         output[utterance_id]["words"] = utterance_words
         output[utterance_id]["transcript"] = " ".join(w["word"] for w in utterance_words)
+        output[utterance_id]["confidence"] = _mean_word_confidence(utterance_words)
 
     if skipped:
         logger.info("transcription_extras.split: skipped %d word(s) missing start/end", skipped)

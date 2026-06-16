@@ -18,10 +18,12 @@ For `CUSTOM_ASYNC` / `CUSTOM_ASYNC_V2` providers, the async group task calls
    (raw PCM concatenated with a fixed silence gap between chunks).
 4. **Sends** the MP3 to our WhisperX `POST /attendee/transcribe`.
 5. **Splits** the response back onto the individual utterances via our hardened
-   `split_transcription_by_utterance()`, forwarding every confidence score: per-word
-   `confidence` (kept on each word), the per-utterance `confidence` (mapped 1:1 — one
-   service utterance per gap-separated utterance), and the transcription-global
-   `language` / `language_confidence` (carried on every utterance).
+   `split_transcription_by_utterance()`, carrying the confidence scores: per-word
+   `confidence` (kept on each word), the per-utterance `confidence` (the mean of that
+   utterance's bucketed word confidences — the service re-segments the combined file with
+   its own VAD and returns a different, smaller number of utterances than we appended, so
+   a positional 1:1 map is unsound), and the transcription-global `language` /
+   `language_confidence` (carried on every utterance).
 
 ### The one correctness rule
 
